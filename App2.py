@@ -6,11 +6,7 @@ from datetime import date
 
 DB_FILE = "expense_app.db"
 
-st.set_page_config(
-    page_title="TaxHacker Expense Module",
-    page_icon="💸",
-    layout="wide"
-)
+st.set_page_config(page_title="TaxHacker Expense Module", page_icon="💸", layout="wide")
 
 
 def get_conn():
@@ -21,11 +17,31 @@ def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 
-def init_db():
+def run_sql(sql, params=None, fetch=False):
     conn = get_conn()
     cur = conn.cursor()
+    if params:
+        cur.execute(sql, params)
+    else:
+        cur.execute(sql)
+    rows = cur.fetchall() if fetch else None
+    conn.commit()
+    conn.close()
+    return rows
 
-    cur.execute("""
+
+def get_df(sql, params=None):
+    conn = get_conn()
+    if params:
+        df = pd.read_sql_query(sql, conn, params=params)
+    else:
+        df = pd.read_sql_query(sql, conn)
+    conn.close()
+    return df
+
+
+def create_table_users():
+    run_sql("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT UNIQUE,
@@ -35,7 +51,9 @@ def init_db():
         )
     """)
 
-    cur.execute("""
+
+def create_table_expenses():
+    run_sql("""
         CREATE TABLE IF NOT EXISTS expenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             expense_date TEXT,
@@ -50,51 +68,59 @@ def init_db():
         )
     """)
 
-    cur.execute("""
+
+def create_table_amoebas():
+    run_sql("""
         CREATE TABLE IF NOT EXISTS amoebas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE
         )
     """)
 
-    cur.execute("""
+
+def create_table_categories():
+    run_sql("""
         CREATE TABLE IF NOT EXISTS categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE
         )
     """)
 
-    cur.execute("""
+
+def create_table_payment_methods():
+    run_sql("""
         CREATE TABLE IF NOT EXISTS payment_methods (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE
         )
     """)
 
-    cur.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
-    admin_count = cur.fetchone()[0]
 
-    if admin_count == 0:
-        cur.execute(
+def ensure_default_admin():
+    rows = run_sql("SELECT COUNT(*) FROM users WHERE role = 'admin'", fetch=True)
+    if rows[0][0] == 0:
+        run_sql(
             "INSERT INTO users (email, name, password, role) VALUES (?, ?, ?, ?)",
             ("admin@taxhacker.com", "Admin", hash_password("Admin123!"), "admin")
         )
 
-    cur.execute("SELECT COUNT(*) FROM amoebas")
-    if cur.fetchone()[0] == 0:
-        cur.executemany(
-            "INSERT INTO amoebas (name) VALUES (?)",
-            [("Marketing",), ("Sales",), ("Finance",), ("Operations",), ("Product",)]
-        )
 
-    cur.execute("SELECT COUNT(*) FROM categories")
-    if cur.fetchone()[0] == 0:
-        cur.executemany(
-            "INSERT INTO categories (name) VALUES (?)",
-            [("Travel",), ("Meal",), ("Software",), ("Office Supplies",), ("Other",)]
-        )
+def ensure_default_master_data():
+    if run_sql("SELECT COUNT(*) FROM amoebas", fetch=True)[0][0] == 0:
+        run_sql("INSERT INTO amoebas (name) VALUES (?)", ("Marketing",))
+        run_sql("INSERT INTO amoebas (name) VALUES (?)", ("Sales",))
+        run_sql("INSERT INTO amoebas (name) VALUES (?)", ("Finance",))
+        run_sql("INSERT INTO amoebas (name) VALUES (?)", ("Operations",))
+        run_sql("INSERT INTO amoebas (name) VALUES (?)", ("Product",))
 
-    cur.execute("SELECT COUNT(*) FROM payment_methods")
-    if cur.fetchone()[0] == 0:
-        cur.executemany(
-            
+    if run_sql("SELECT COUNT(*) FROM categories", fetch=True)[0][0] == 0:
+        run_sql("INSERT INTO categories (name) VALUES (?)", ("Travel",))
+        run_sql("INSERT INTO categories (name) VALUES (?)", ("Meal",))
+        run_sql("INSERT INTO categories (name) VALUES (?)", ("Software",))
+        run_sql("INSERT INTO categories (name) VALUES (?)", ("Office Supplies",))
+        run_sql("INSERT INTO categories (name) VALUES (?)", ("Other",))
+
+    if run_sql("SELECT COUNT(*) FROM payment_methods", fetch=True)[0][0] == 0:
+        run_sql("INSERT INTO payment_methods (name) VALUES (?)", ("Corporate Card",))
+        run_sql("INSERT INTO payment_methods (name) VALUES (?)", ("Cash",))
+        run_sql("INSERT INTO payment_methods (name) VALUES 
