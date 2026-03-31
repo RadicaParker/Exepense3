@@ -54,6 +54,73 @@ def init_db():
     """)
 
     cur.execute("""
+       Yes — the best next step is to add a simple admin control portal with three editable master lists: **Amoeba**, **Expense Category**, and **Payment Method**. Streamlit forms work well for this kind of admin setup, and SQLite is a practical way to store the master data so your select boxes can load options dynamically instead of being hardcoded [web:86][web:74][web:76].
+
+## What changes
+
+Right now your dropdowns are fixed in the code, so every time you want to change a department or category, you would need to edit Python manually. A better design is to store those values in database tables and let the admin add or delete them from a protected admin page, which is a common pattern for lightweight internal apps [web:77][web:78].
+
+## Replace app.py
+
+Please replace your current `app.py` with the version below. It keeps the login, expense form, and user management, and adds a new **Master Data** admin page where you can manage Amoeba, Expense Category, and Payment Method.
+
+```python
+import streamlit as st
+import sqlite3
+import hashlib
+import pandas as pd
+from datetime import date
+
+DB_FILE = "expense_app.db"
+
+st.set_page_config(page_title="TaxHacker Expense Module", page_icon="💸", layout="wide")
+
+
+def get_conn():
+    return sqlite3.connect(DB_FILE, check_same_thread=False)
+
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def init_db():
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE,
+            name TEXT,
+            password TEXT,
+            role TEXT
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            expense_date TEXT,
+            user_email TEXT,
+            amoeba TEXT,
+            category TEXT,
+            description TEXT,
+            amount REAL,
+            payment_method TEXT,
+            receipt_name TEXT,
+            status TEXT
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS amoebas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE
+        )
+    """)
+
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE
@@ -68,7 +135,7 @@ def init_db():
     """)
 
     cur.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
-    admin_count = cur.fetchone()[0]
+    admin_count = cur.fetchone()
 
     if admin_count == 0:
         cur.execute("""
@@ -82,17 +149,17 @@ def init_db():
         ))
 
     cur.execute("SELECT COUNT(*) FROM amoebas")
-    if cur.fetchone()[0] == 0:
+    if cur.fetchone() == 0:
         default_amoebas = [("Marketing",), ("Sales",), ("Finance",), ("Operations",), ("Product",)]
         cur.executemany("INSERT INTO amoebas (name) VALUES (?)", default_amoebas)
 
     cur.execute("SELECT COUNT(*) FROM categories")
-    if cur.fetchone()[0] == 0:
+    if cur.fetchone() == 0:
         default_categories = [("Travel",), ("Meal",), ("Software",), ("Office Supplies",), ("Other",)]
         cur.executemany("INSERT INTO categories (name) VALUES (?)", default_categories)
 
     cur.execute("SELECT COUNT(*) FROM payment_methods")
-    if cur.fetchone()[0] == 0:
+    if cur.fetchone() == 0:
         default_methods = [("Corporate Card",), ("Cash",), ("Personal Card",), ("Bank Transfer",)]
         cur.executemany("INSERT INTO payment_methods (name) VALUES (?)", default_methods)
 
@@ -256,9 +323,9 @@ if not st.session_state.logged_in:
                 user = login_user(email, password)
                 if user:
                     st.session_state.logged_in = True
-                    st.session_state.user_email = user[1]
-                    st.session_state.user_name = user[2]
-                    st.session_state.user_role = user[3]
+                    st.session_state.user_email = user[4]
+                    st.session_state.user_name = user[5]
+                    st.session_state.user_role = user[6]
                     st.success("Login successful.")
                     st.rerun()
                 else:
@@ -365,4 +432,174 @@ else:
 
     elif menu == "All Expenses" and st.session_state.user_role == "admin":
         st.subheader("All Expenses")
-        df = 
+        df = get_all_expenses()
+
+        if df.empty:
+            st.info("No expense records found.")
+        else:
+            st.metric("Company Total Expenses", f"${df['amount'].sum():,.2f}")
+            st.dataframe(df, use_container_width=True)
+
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download All Expenses CSV",
+                data=csv,
+                file_name="all_expenses.csv",
+                mime="text/csv"
+            )
+
+    elif menu == "User Management" and st.session_state.user_role == "admin":
+        st.subheader("User Management")
+
+        st.markdown("### Existing Users")
+        users_df = get_all_users()
+        st.dataframe(users_df, use_container_width=True)
+
+        st.markdown("### Add New User")
+        with st.form("admin_add_user_form"):
+            new_name = st.text_input("User Name")
+            new_email = st.text_input("User Email")
+            new_password = st.text_input("Temporary Password", type="password")
+            new_role = st.selectbox("Role", ["user", "admin"])
+            add_user_btn = st.form_submit_button("Add User")
+
+            if add_user_btn:
+                if not new_name or not new_email or not new_password:
+                    st.error("Please fill in all fields.")
+                else:
+                    ok, msg = create_user(new_email, new_name, new_password, new_role)
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+        st.markdown("### Delete User")
+        non_admin_users = users_df[users_df["role"] != "admin"]
+
+        if non_admin_users.empty:
+            st.info("No non-admin users available for deletion.")
+        else:
+            user_options = {
+                f"{row['name']} ({row['email']})": row["id"]
+                for _, row in non_admin_users.iterrows()
+            }
+
+            selected_user = st.selectbox("Select user to delete", list(user_options.keys()))
+            if st.button("Delete Selected User"):
+                delete_user(user_options[selected_user])
+                st.success("User deleted.")
+                st.rerun()
+
+    elif menu == "Master Data" and st.session_state.user_role == "admin":
+        st.subheader("Master Data Control Portal")
+
+        tab1, tab2, tab3 = st.tabs(["Amoeba", "Expense Category", "Payment Method"])
+
+        with tab1:
+            st.markdown("### Amoeba / Department List")
+            amoeba_df = get_master_data("amoebas")
+            st.dataframe(amoeba_df, use_container_width=True)
+
+            with st.form("add_amoeba_form"):
+                new_amoeba = st.text_input("New Amoeba / Department")
+                add_amoeba_btn = st.form_submit_button("Add Amoeba")
+                if add_amoeba_btn:
+                    if not new_amoeba.strip():
+                        st.error("Please enter a value.")
+                    else:
+                        ok, msg = add_master_item("amoebas", new_amoeba.strip())
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+            if not amoeba_df.empty:
+                amoeba_map = {row["name"]: row["id"] for _, row in amoeba_df.iterrows()}
+                selected_amoeba = st.selectbox("Select Amoeba to delete", list(amoeba_map.keys()))
+                if st.button("Delete Amoeba"):
+                    delete_master_item("amoebas", amoeba_map[selected_amoeba])
+                    st.success("Amoeba deleted.")
+                    st.rerun()
+
+        with tab2:
+            st.markdown("### Expense Category List")
+            category_df = get_master_data("categories")
+            st.dataframe(category_df, use_container_width=True)
+
+            with st.form("add_category_form"):
+                new_category = st.text_input("New Expense Category")
+                add_category_btn = st.form_submit_button("Add Category")
+                if add_category_btn:
+                    if not new_category.strip():
+                        st.error("Please enter a value.")
+                    else:
+                        ok, msg = add_master_item("categories", new_category.strip())
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+            if not category_df.empty:
+                category_map = {row["name"]: row["id"] for _, row in category_df.iterrows()}
+                selected_category = st.selectbox("Select Category to delete", list(category_map.keys()))
+                if st.button("Delete Category"):
+                    delete_master_item("categories", category_map[selected_category])
+                    st.success("Category deleted.")
+                    st.rerun()
+
+        with tab3:
+            st.markdown("### Payment Method List")
+            payment_df = get_master_data("payment_methods")
+            st.dataframe(payment_df, use_container_width=True)
+
+            with st.form("add_payment_form"):
+                new_payment = st.text_input("New Payment Method")
+                add_payment_btn = st.form_submit_button("Add Payment Method")
+                if add_payment_btn:
+                    if not new_payment.strip():
+                        st.error("Please enter a value.")
+                    else:
+                        ok, msg = add_master_item("payment_methods", new_payment.strip())
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+            if not payment_df.empty:
+                payment_map = {row["name"]: row["id"] for _, row in payment_df.iterrows()}
+                selected_payment = st.selectbox("Select Payment Method to delete", list(payment_map.keys()))
+                if st.button("Delete Payment Method"):
+                    delete_master_item("payment_methods", payment_map[selected_payment])
+                    st.success("Payment method deleted.")
+                    st.rerun()
+```
+
+This version makes your dropdowns dynamic by reading the options from database tables, so anything you add in the admin portal will appear in the expense form immediately after rerun [web:74][web:79][web:82].
+
+## Requirements
+
+Keep `requirements.txt` as:
+
+```txt
+streamlit
+pandas
+```
+
+That is still enough because the new master-data feature continues to use built-in `sqlite3` and Streamlit forms rather than any extra package [web:74][web:86].
+
+## How to use
+
+Log in with your admin account, open **Master Data** from the left sidebar, and then add or delete items under the three tabs: Amoeba, Expense Category, and Payment Method. After that, go back to **Expense Form** and the new values should appear automatically in the dropdown lists because those select boxes now load their options from the database tables [web:79][web:82].
+
+## One caution
+
+This version supports add and delete, but not true rename/edit yet, so if you want to change “Marketing” to “Growth Marketing,” the current workaround is to add the new value and delete the old one. A proper edit function can be added next, and that would be the cleanest next upgrade for an admin portal like yours [web:78][web:77].
+
+The next best upgrade is:
+1. Add **edit/rename** button for Amoeba, Category, and Payment Method.
+2. Prevent deleting a value if it is already used in expense records.
+3. Add approval status workflow.
