@@ -51,6 +51,16 @@ def init_db():
     exec_sql("CREATE TABLE IF NOT EXISTS amoebas (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)")
     exec_sql("CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)")
     exec_sql("CREATE TABLE IF NOT EXISTS payment_methods (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)")
+    
+    # New table for Vendor Expenses (3 vendors comparison)
+    exec_sql("""CREATE TABLE IF NOT EXISTS vendor_expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, expense_date TEXT, user_email TEXT, amoeba TEXT, 
+        category TEXT, description TEXT, currency TEXT, payment_method TEXT, 
+        v1_name TEXT, v1_amount REAL, v1_file_name TEXT, v1_file_data BLOB, v1_file_type TEXT, 
+        v2_name TEXT, v2_amount REAL, v2_file_name TEXT, v2_file_data BLOB, v2_file_type TEXT, 
+        v3_name TEXT, v3_amount REAL, v3_file_name TEXT, v3_file_data BLOB, v3_file_type TEXT, 
+        selected_vendor TEXT, gross_profit_pct REAL, status TEXT, assigned_approver TEXT, 
+        approver_comment TEXT, approved_by TEXT)""")
 
     safe_add_column("users", "approver_email TEXT")
     safe_add_column("users", "user_amoeba TEXT")
@@ -135,16 +145,16 @@ def get_user_profile(user_email):
 
 def show_receipt(receipt_name, receipt_data, receipt_type, key_name):
     if receipt_data is None:
-        st.info("No attachment uploaded.")
+        st.info("No attachment available.")
         return
 
     if str(receipt_type).startswith("image/"):
         st.image(receipt_data, caption=receipt_name, use_container_width=True)
 
     st.download_button(
-        "Download Receipt",
+        "Download Document",
         data=receipt_data,
-        file_name=receipt_name if receipt_name else "receipt",
+        file_name=receipt_name if receipt_name else "document",
         mime=receipt_type if receipt_type else "application/octet-stream",
         key=key_name
     )
@@ -154,6 +164,7 @@ def logout():
     st.session_state.user_email = ""
     st.session_state.user_name = ""
     st.session_state.user_role = ""
+
 
 init_db()
 
@@ -235,206 +246,265 @@ else:
         logout()
         st.rerun()
 
+    categories = get_names("categories")
+    payment_methods = get_names("payment_methods")
+    currencies = ["HKD", "CNY", "USD"]
+    approver_email, user_amoeba = get_user_profile(st.session_state.user_email)
+
     if menu == "Expense Form":
-        st.subheader("Submit Expense")
+        tab_reg, tab_ven = st.tabs(["Standard Expense", "Vendor Expense (3 Quotes)"])
 
-        categories = get_names("categories")
-        payment_methods = get_names("payment_methods")
-        currencies = ["HKD", "CNY", "USD"]
+        # ========================================================
+        # STANDARD EXPENSE TAB
+        # ========================================================
+        with tab_reg:
+            st.subheader("Submit Standard Expense")
+            with st.form("expense_form"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    expense_date = st.date_input("Expense Date", value=date.today())
+                    category = st.selectbox("Expense Category", categories)
+                    currency = st.selectbox("Currency", currencies)
 
-        approver_email, user_amoeba = get_user_profile(st.session_state.user_email)
+                with col2:
+                    amount = st.number_input("Amount", min_value=0.0, step=1.0, format="%.2f")
+                    payment_method = st.selectbox("Payment Method", payment_methods)
+                    receipt = st.file_uploader("Upload Receipt (optional)", type=["pdf", "png", "jpg", "jpeg"])
 
-        with st.form("expense_form"):
-            col1, col2 = st.columns(2)
+                st.text_input("Amoeba / Department", value=user_amoeba, disabled=True)
+                description = st.text_area("Description")
+                save_btn = st.form_submit_button("Save Expense")
 
-            with col1:
-                expense_date = st.date_input("Expense Date", value=date.today())
-                category = st.selectbox("Expense Category", categories)
-                currency = st.selectbox("Currency", currencies)
+                if save_btn:
+                    if amount <= 0:
+                        st.error("Amount must be greater than 0.")
+                    elif approver_email == "":
+                        st.error("No approver is assigned to your account. Please contact admin.")
+                    elif user_amoeba == "":
+                        st.error("No Amoeba / Department is assigned to your account. Please contact admin.")
+                    else:
+                        receipt_name = ""
+                        receipt_data = None
+                        receipt_type = ""
 
-            with col2:
-                amount = st.number_input("Amount", min_value=0.0, step=1.0, format="%.2f")
-                payment_method = st.selectbox("Payment Method", payment_methods)
-                receipt = st.file_uploader("Upload Receipt (optional)", type=["pdf", "png", "jpg", "jpeg"])
+                        if receipt is not None:
+                            receipt_name = receipt.name
+                            receipt_data = receipt.getvalue()
+                            receipt_type = receipt.type
 
-            st.text_input("Amoeba / Department", value=user_amoeba, disabled=True)
-            description = st.text_area("Description")
-            save_btn = st.form_submit_button("Save Expense")
-
-            if save_btn:
-                if amount <= 0:
-                    st.error("Amount must be greater than 0.")
-                elif approver_email == "":
-                    st.error("No approver is assigned to your account. Please contact admin.")
-                elif user_amoeba == "":
-                    st.error("No Amoeba / Department is assigned to your account. Please contact admin.")
-                else:
-                    receipt_name = ""
-                    receipt_data = None
-                    receipt_type = ""
-
-                    if receipt is not None:
-                        receipt_name = receipt.name
-                        receipt_data = receipt.getvalue()
-                        receipt_type = receipt.type
-
-                    exec_sql(
-                        "INSERT INTO expenses (expense_date, user_email, amoeba, category, description, amount, currency, payment_method, receipt_name, receipt_data, receipt_type, status, assigned_approver, approver_comment, approved_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            str(expense_date),
-                            st.session_state.user_email,
-                            user_amoeba,
-                            category,
-                            description,
-                            amount,
-                            currency,
-                            payment_method,
-                            receipt_name,
-                            receipt_data,
-                            receipt_type,
-                            "Submitted",
-                            approver_email,
-                            "",
-                            ""
+                        exec_sql(
+                            "INSERT INTO expenses (expense_date, user_email, amoeba, category, description, amount, currency, payment_method, receipt_name, receipt_data, receipt_type, status, assigned_approver, approver_comment, approved_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (str(expense_date), st.session_state.user_email, user_amoeba, category, description, amount, currency, payment_method, receipt_name, receipt_data, receipt_type, "Submitted", approver_email, "", "")
                         )
-                    )
-                    st.success("Expense submitted for approval.")
-                    st.rerun()
+                        st.success("Expense submitted for approval.")
+                        st.rerun()
+
+        # ========================================================
+        # VENDOR EXPENSE TAB
+        # ========================================================
+        with tab_ven:
+            st.subheader("Submit Vendor Expense")
+            with st.form("vendor_expense_form"):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    expense_date_v = st.date_input("Date", value=date.today(), key="v_date")
+                    category_v = st.selectbox("Category", categories, key="v_cat")
+                with col2:
+                    currency_v = st.selectbox("Currency", currencies, key="v_curr")
+                    payment_method_v = st.selectbox("Payment Method", payment_methods, key="v_pay")
+                with col3:
+                    gp_pct = st.number_input("Gross Profit %", min_value=0.0, max_value=100.0, step=0.1, format="%.1f")
+                    selected_vendor = st.selectbox("Select Winning Vendor", ["Vendor 1", "Vendor 2", "Vendor 3"])
+
+                st.text_input("Amoeba / Department", value=user_amoeba, disabled=True, key="v_amoeba")
+                description_v = st.text_area("Description / Business Justification", key="v_desc")
+
+                st.markdown("### 3 Vendors Comparison")
+                v1_col, v2_col, v3_col = st.columns(3)
+                
+                with v1_col:
+                    st.markdown("**Vendor 1**")
+                    v1_name = st.text_input("Vendor 1 Name", key="v1_name")
+                    v1_amount = st.number_input("Vendor 1 Amount", min_value=0.0, step=1.0, format="%.2f", key="v1_amount")
+                    v1_file = st.file_uploader("Quotation 1 (Required)", type=["pdf", "png", "jpg", "jpeg"], key="v1_file")
+
+                with v2_col:
+                    st.markdown("**Vendor 2**")
+                    v2_name = st.text_input("Vendor 2 Name", key="v2_name")
+                    v2_amount = st.number_input("Vendor 2 Amount", min_value=0.0, step=1.0, format="%.2f", key="v2_amount")
+                    v2_file = st.file_uploader("Quotation 2 (Required)", type=["pdf", "png", "jpg", "jpeg"], key="v2_file")
+
+                with v3_col:
+                    st.markdown("**Vendor 3**")
+                    v3_name = st.text_input("Vendor 3 Name", key="v3_name")
+                    v3_amount = st.number_input("Vendor 3 Amount", min_value=0.0, step=1.0, format="%.2f", key="v3_amount")
+                    v3_file = st.file_uploader("Quotation 3 (Required)", type=["pdf", "png", "jpg", "jpeg"], key="v3_file")
+
+                save_ven_btn = st.form_submit_button("Save Vendor Expense")
+
+                if save_ven_btn:
+                    if approver_email == "" or user_amoeba == "":
+                        st.error("No approver or Amoeba assigned. Please contact admin.")
+                    elif v1_amount <= 0 or v2_amount <= 0 or v3_amount <= 0:
+                        st.error("All 3 vendor amounts must be greater than 0.")
+                    elif not v1_name.strip() or not v2_name.strip() or not v3_name.strip():
+                        st.error("Please provide names for all 3 vendors.")
+                    elif not v1_file or not v2_file or not v3_file:
+                        st.error("Please upload supporting quotations for all 3 vendors.")
+                    else:
+                        exec_sql("""
+                            INSERT INTO vendor_expenses (
+                                expense_date, user_email, amoeba, category, description, currency, payment_method, 
+                                v1_name, v1_amount, v1_file_name, v1_file_data, v1_file_type,
+                                v2_name, v2_amount, v2_file_name, v2_file_data, v2_file_type,
+                                v3_name, v3_amount, v3_file_name, v3_file_data, v3_file_type,
+                                selected_vendor, gross_profit_pct, status, assigned_approver, approver_comment, approved_by
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            str(expense_date_v), st.session_state.user_email, user_amoeba, category_v, description_v, currency_v, payment_method_v,
+                            v1_name, v1_amount, v1_file.name, v1_file.getvalue(), v1_file.type,
+                            v2_name, v2_amount, v2_file.name, v2_file.getvalue(), v2_file.type,
+                            v3_name, v3_amount, v3_file.name, v3_file.getvalue(), v3_file.type,
+                            selected_vendor, gp_pct, "Submitted", approver_email, "", ""
+                        ))
+                        st.success("Vendor expense submitted for approval.")
+                        st.rerun()
 
     elif menu == "My Expenses":
         st.subheader("My Expenses")
+        tab_reg, tab_ven = st.tabs(["Standard Expenses", "Vendor Expenses"])
 
-        df = fetch_df(
-            "SELECT id, expense_date, amoeba, category, description, amount, currency, payment_method, receipt_name, receipt_data, receipt_type, status, assigned_approver, approver_comment, approved_by FROM expenses WHERE user_email = ? ORDER BY id DESC",
-            (st.session_state.user_email,)
-        )
+        with tab_reg:
+            df = fetch_df("SELECT id, expense_date, amoeba, category, description, amount, currency, payment_method, receipt_name, receipt_data, receipt_type, status, assigned_approver, approver_comment, approved_by FROM expenses WHERE user_email = ? ORDER BY id DESC", (st.session_state.user_email,))
+            if df.empty:
+                st.info("No standard expenses submitted yet.")
+            else:
+                st.dataframe(df.drop(columns=["receipt_data"], errors="ignore"), use_container_width=True)
+                st.markdown("### View Attachment")
+                selected_expense_id = st.selectbox("Select standard expense ID", df["id"].tolist(), key="my_ex_id")
+                selected_row = df[df["id"] == selected_expense_id].iloc[0]
+                show_receipt(selected_row["receipt_name"], selected_row["receipt_data"], selected_row["receipt_type"], "my_rec_" + str(selected_expense_id))
+                st.download_button("Download CSV", df.drop(columns=["receipt_data"]).to_csv(index=False).encode("utf-8"), "my_expenses.csv", "text/csv")
 
-        if df.empty:
-            st.info("No expenses submitted yet.")
-        else:
-            st.dataframe(df.drop(columns=["receipt_data"], errors="ignore"), use_container_width=True)
-
-            st.markdown("### View Attachment")
-            expense_ids = df["id"].tolist()
-            selected_expense_id = st.selectbox("Select expense ID", expense_ids, key="my_expense_attachment")
-            selected_row = df[df["id"] == selected_expense_id].iloc[0]
-
-            st.write("Receipt: " + str(selected_row["receipt_name"]))
-            show_receipt(
-                selected_row["receipt_name"],
-                selected_row["receipt_data"],
-                selected_row["receipt_type"],
-                "my_receipt_" + str(selected_expense_id)
-            )
-
-            csv_df = df.drop(columns=["receipt_data"], errors="ignore")
-            st.download_button(
-                "Download My Expenses CSV",
-                csv_df.to_csv(index=False).encode("utf-8"),
-                "my_expenses.csv",
-                "text/csv"
-            )
+        with tab_ven:
+            df_v = fetch_df("SELECT id, expense_date, category, description, currency, payment_method, v1_name, v1_amount, v2_name, v2_amount, v3_name, v3_amount, selected_vendor, gross_profit_pct, status, assigned_approver, approver_comment, v1_file_name, v1_file_data, v1_file_type, v2_file_name, v2_file_data, v2_file_type, v3_file_name, v3_file_data, v3_file_type FROM vendor_expenses WHERE user_email = ? ORDER BY id DESC", (st.session_state.user_email,))
+            if df_v.empty:
+                st.info("No vendor expenses submitted yet.")
+            else:
+                cols_to_drop = ["v1_file_data", "v2_file_data", "v3_file_data"]
+                st.dataframe(df_v.drop(columns=cols_to_drop, errors="ignore"), use_container_width=True)
+                st.markdown("### View Quotations")
+                v_id = st.selectbox("Select vendor expense ID", df_v["id"].tolist(), key="my_ven_id")
+                v_row = df_v[df_v["id"] == v_id].iloc[0]
+                
+                quote_sel = st.radio("Select Quotation to View", ["Vendor 1", "Vendor 2", "Vendor 3"], horizontal=True, key="my_ven_radio")
+                if quote_sel == "Vendor 1":
+                    show_receipt(v_row["v1_file_name"], v_row["v1_file_data"], v_row["v1_file_type"], f"v1_{v_id}")
+                elif quote_sel == "Vendor 2":
+                    show_receipt(v_row["v2_file_name"], v_row["v2_file_data"], v_row["v2_file_type"], f"v2_{v_id}")
+                else:
+                    show_receipt(v_row["v3_file_name"], v_row["v3_file_data"], v_row["v3_file_type"], f"v3_{v_id}")
 
     elif menu == "All Expenses" and st.session_state.user_role == "admin":
         st.subheader("All Expenses")
+        tab_reg, tab_ven = st.tabs(["Standard Expenses", "Vendor Expenses"])
 
-        df = fetch_df(
-            "SELECT id, expense_date, user_email, amoeba, category, description, amount, currency, payment_method, receipt_name, receipt_data, receipt_type, status, assigned_approver, approver_comment, approved_by FROM expenses ORDER BY id DESC"
-        )
+        with tab_reg:
+            df = fetch_df("SELECT id, expense_date, user_email, amoeba, category, description, amount, currency, payment_method, receipt_name, receipt_data, receipt_type, status, assigned_approver, approver_comment, approved_by FROM expenses ORDER BY id DESC")
+            if df.empty:
+                st.info("No standard expenses found.")
+            else:
+                st.dataframe(df.drop(columns=["receipt_data"], errors="ignore"), use_container_width=True)
+                st.markdown("### View Attachment")
+                ex_id = st.selectbox("Select standard expense ID", df["id"].tolist(), key="all_ex_id")
+                row = df[df["id"] == ex_id].iloc[0]
+                show_receipt(row["receipt_name"], row["receipt_data"], row["receipt_type"], "all_rec_" + str(ex_id))
+                st.download_button("Download CSV", df.drop(columns=["receipt_data"]).to_csv(index=False).encode("utf-8"), "all_expenses.csv", "text/csv")
 
-        if df.empty:
-            st.info("No expense records found.")
-        else:
-            st.dataframe(df.drop(columns=["receipt_data"], errors="ignore"), use_container_width=True)
-
-            st.markdown("### View Attachment")
-            expense_ids = df["id"].tolist()
-            selected_expense_id = st.selectbox("Select expense ID", expense_ids, key="all_expense_attachment")
-            selected_row = df[df["id"] == selected_expense_id].iloc[0]
-
-            st.write("Employee: " + str(selected_row["user_email"]))
-            st.write("Receipt: " + str(selected_row["receipt_name"]))
-            show_receipt(
-                selected_row["receipt_name"],
-                selected_row["receipt_data"],
-                selected_row["receipt_type"],
-                "all_receipt_" + str(selected_expense_id)
-            )
-
-            csv_df = df.drop(columns=["receipt_data"], errors="ignore")
-            st.download_button(
-                "Download All Expenses CSV",
-                csv_df.to_csv(index=False).encode("utf-8"),
-                "all_expenses.csv",
-                "text/csv"
-            )
+        with tab_ven:
+            df_v = fetch_df("SELECT id, expense_date, user_email, amoeba, category, description, currency, payment_method, v1_name, v1_amount, v2_name, v2_amount, v3_name, v3_amount, selected_vendor, gross_profit_pct, status, assigned_approver, approver_comment, v1_file_name, v1_file_data, v1_file_type, v2_file_name, v2_file_data, v2_file_type, v3_file_name, v3_file_data, v3_file_type FROM vendor_expenses ORDER BY id DESC")
+            if df_v.empty:
+                st.info("No vendor expenses found.")
+            else:
+                cols_to_drop = ["v1_file_data", "v2_file_data", "v3_file_data"]
+                st.dataframe(df_v.drop(columns=cols_to_drop, errors="ignore"), use_container_width=True)
+                st.markdown("### View Quotations")
+                v_id = st.selectbox("Select vendor expense ID", df_v["id"].tolist(), key="all_ven_id")
+                v_row = df_v[df_v["id"] == v_id].iloc[0]
+                
+                quote_sel = st.radio("Select Quotation to View", ["Vendor 1", "Vendor 2", "Vendor 3"], horizontal=True, key="all_ven_radio")
+                if quote_sel == "Vendor 1":
+                    show_receipt(v_row["v1_file_name"], v_row["v1_file_data"], v_row["v1_file_type"], f"v1_all_{v_id}")
+                elif quote_sel == "Vendor 2":
+                    show_receipt(v_row["v2_file_name"], v_row["v2_file_data"], v_row["v2_file_type"], f"v2_all_{v_id}")
+                else:
+                    show_receipt(v_row["v3_file_name"], v_row["v3_file_data"], v_row["v3_file_type"], f"v3_all_{v_id}")
 
     elif menu == "Approval Queue":
         st.subheader("Approval Queue")
+        tab_reg, tab_ven = st.tabs(["Standard Expenses", "Vendor Expenses"])
 
-        df = fetch_df(
-            "SELECT id, expense_date, user_email, amoeba, category, description, amount, currency, payment_method, receipt_name, receipt_data, receipt_type, status FROM expenses WHERE status = ? AND assigned_approver = ? ORDER BY id DESC",
-            ("Submitted", st.session_state.user_email)
-        )
+        with tab_reg:
+            df = fetch_df("SELECT id, expense_date, user_email, amoeba, category, description, amount, currency, payment_method, receipt_name, receipt_data, receipt_type, status FROM expenses WHERE status = ? AND assigned_approver = ? ORDER BY id DESC", ("Submitted", st.session_state.user_email))
+            if df.empty:
+                st.info("No standard expenses waiting for your approval.")
+            else:
+                st.dataframe(df.drop(columns=["receipt_data"], errors="ignore"), use_container_width=True)
+                option_map = {f'ID {r["id"]} | {r["user_email"]} | {r["currency"]} {r["amount"]:.2f}': r["id"] for _, r in df.iterrows()}
+                selected_label = st.selectbox("Select standard expense to review", list(option_map.keys()), key="app_ex_sel")
+                selected_id = option_map[selected_label]
+                selected = df[df["id"] == selected_id].iloc[0]
 
-        if df.empty:
-            st.info("No expenses waiting for your approval.")
-        else:
-            st.dataframe(df.drop(columns=["receipt_data"], errors="ignore"), use_container_width=True)
+                show_receipt(selected["receipt_name"], selected["receipt_data"], selected["receipt_type"], f"app_rec_{selected_id}")
+                comment = st.text_area("Approval Comment", key="app_ex_com")
+                c1, c2 = st.columns(2)
+                if c1.button("Approve Expense", key="app_ex_y"):
+                    exec_sql("UPDATE expenses SET status=?, approver_comment=?, approved_by=? WHERE id=?", ("Approved", comment, st.session_state.user_email, selected_id))
+                    st.success("Approved."); st.rerun()
+                if c2.button("Reject Expense", key="app_ex_n"):
+                    exec_sql("UPDATE expenses SET status=?, approver_comment=?, approved_by=? WHERE id=?", ("Rejected", comment, st.session_state.user_email, selected_id))
+                    st.warning("Rejected."); st.rerun()
 
-            option_map = {}
-            for _, row in df.iterrows():
-                label = "ID " + str(row["id"]) + " | " + str(row["user_email"]) + " | " + str(row["currency"]) + " " + f'{row["amount"]:.2f}' + " | " + str(row["category"])
-                option_map[label] = row["id"]
+        with tab_ven:
+            df_v = fetch_df("SELECT * FROM vendor_expenses WHERE status = ? AND assigned_approver = ? ORDER BY id DESC", ("Submitted", st.session_state.user_email))
+            if df_v.empty:
+                st.info("No vendor expenses waiting for your approval.")
+            else:
+                cols_to_drop = ["v1_file_data", "v2_file_data", "v3_file_data"]
+                st.dataframe(df_v.drop(columns=cols_to_drop, errors="ignore"), use_container_width=True)
+                
+                v_opt_map = {f'ID {r["id"]} | {r["user_email"]} | {r["category"]} | GP: {r["gross_profit_pct"]}%': r["id"] for _, r in df_v.iterrows()}
+                v_label = st.selectbox("Select vendor expense to review", list(v_opt_map.keys()), key="app_ven_sel")
+                v_id = v_opt_map[v_label]
+                v_row = df_v[df_v["id"] == v_id].iloc[0]
 
-            selected_label = st.selectbox("Select expense to review", list(option_map.keys()))
-            selected_id = option_map[selected_label]
-            selected = df[df["id"] == selected_id].iloc[0]
+                st.write(f"**Selected Vendor:** {v_row['selected_vendor']}")
+                st.write(f"**GP %:** {v_row['gross_profit_pct']}%")
 
-            st.markdown("### Selected Expense")
-            st.write("Employee: " + str(selected["user_email"]))
-            st.write("Date: " + str(selected["expense_date"]))
-            st.write("Amoeba: " + str(selected["amoeba"]))
-            st.write("Category: " + str(selected["category"]))
-            st.write("Amount: " + str(selected["currency"]) + " " + f'{selected["amount"]:.2f}')
-            st.write("Payment Method: " + str(selected["payment_method"]))
-            st.write("Description: " + str(selected["description"]))
-            st.write("Receipt: " + str(selected["receipt_name"]))
+                q_sel = st.radio("Review Quotations", ["Vendor 1", "Vendor 2", "Vendor 3"], horizontal=True, key="app_ven_radio")
+                if q_sel == "Vendor 1":
+                    st.write(f"Name: {v_row['v1_name']} | Amount: {v_row['v1_amount']}")
+                    show_receipt(v_row["v1_file_name"], v_row["v1_file_data"], v_row["v1_file_type"], f"app_v1_{v_id}")
+                elif q_sel == "Vendor 2":
+                    st.write(f"Name: {v_row['v2_name']} | Amount: {v_row['v2_amount']}")
+                    show_receipt(v_row["v2_file_name"], v_row["v2_file_data"], v_row["v2_file_type"], f"app_v2_{v_id}")
+                else:
+                    st.write(f"Name: {v_row['v3_name']} | Amount: {v_row['v3_amount']}")
+                    show_receipt(v_row["v3_file_name"], v_row["v3_file_data"], v_row["v3_file_type"], f"app_v3_{v_id}")
 
-            show_receipt(
-                selected["receipt_name"],
-                selected["receipt_data"],
-                selected["receipt_type"],
-                "approval_receipt_" + str(selected_id)
-            )
-
-            comment = st.text_area("Approval Comment")
-            col_a, col_b = st.columns(2)
-
-            with col_a:
-                if st.button("Approve Expense"):
-                    exec_sql(
-                        "UPDATE expenses SET status = ?, approver_comment = ?, approved_by = ? WHERE id = ?",
-                        ("Approved", comment, st.session_state.user_email, selected_id)
-                    )
-                    st.success("Expense approved.")
-                    st.rerun()
-
-            with col_b:
-                if st.button("Reject Expense"):
-                    exec_sql(
-                        "UPDATE expenses SET status = ?, approver_comment = ?, approved_by = ? WHERE id = ?",
-                        ("Rejected", comment, st.session_state.user_email, selected_id)
-                    )
-                    st.warning("Expense rejected.")
-                    st.rerun()
+                v_comment = st.text_area("Approval Comment", key="app_ven_com")
+                c1, c2 = st.columns(2)
+                if c1.button("Approve Vendor Expense", key="app_ven_y"):
+                    exec_sql("UPDATE vendor_expenses SET status=?, approver_comment=?, approved_by=? WHERE id=?", ("Approved", v_comment, st.session_state.user_email, v_id))
+                    st.success("Approved."); st.rerun()
+                if c2.button("Reject Vendor Expense", key="app_ven_n"):
+                    exec_sql("UPDATE vendor_expenses SET status=?, approver_comment=?, approved_by=? WHERE id=?", ("Rejected", v_comment, st.session_state.user_email, v_id))
+                    st.warning("Rejected."); st.rerun()
 
     elif menu == "User Management" and st.session_state.user_role == "admin":
         st.subheader("User Management")
 
-        users_df = fetch_df(
-            "SELECT id, email, name, role, approver_email, user_amoeba FROM users ORDER BY id"
-        )
+        users_df = fetch_df("SELECT id, email, name, role, approver_email, user_amoeba FROM users ORDER BY id")
         st.dataframe(users_df, use_container_width=True)
 
         all_user_emails = [""] + users_df["email"].tolist()
@@ -454,14 +524,7 @@ else:
                 if not new_name or not new_email or not new_password:
                     st.error("Please fill in all fields.")
                 else:
-                    ok, msg = create_user(
-                        new_email,
-                        new_name,
-                        new_password,
-                        new_role,
-                        new_approver,
-                        new_amoeba
-                    )
+                    ok, msg = create_user(new_email, new_name, new_password, new_role, new_approver, new_amoeba)
                     if ok:
                         st.success(msg)
                         st.rerun()
@@ -474,147 +537,85 @@ else:
         if non_admin_df.empty:
             st.info("No non-admin users found. Please add a user above to update their profile.")
         else:
-            user_options = {}
-            for _, row in non_admin_df.iterrows():
-                label = str(row["name"]) + " (" + str(row["email"]) + ")"
-                user_options[label] = row["email"]
-
-            selected_user_label = st.selectbox(
-                "Select user", 
-                list(user_options.keys()), 
-                key="selected_user_label"
-            )
+            user_options = {f'{r["name"]} ({r["email"]})': r["email"] for _, r in non_admin_df.iterrows()}
+            selected_user_label = st.selectbox("Select user", list(user_options.keys()), key="selected_user_label")
             selected_user_email = user_options[selected_user_label]
 
             current_row = non_admin_df[non_admin_df["email"] == selected_user_email].iloc[0]
             current_approver = current_row["approver_email"] if pd.notna(current_row["approver_email"]) else ""
             current_amoeba = current_row["user_amoeba"] if pd.notna(current_row["user_amoeba"]) else ""
 
-            approver_index = all_user_emails.index(current_approver) if current_approver in all_user_emails else 0
-            amoeba_index = amoeba_choices.index(current_amoeba) if current_amoeba in amoeba_choices else 0
+            app_idx = all_user_emails.index(current_approver) if current_approver in all_user_emails else 0
+            am_idx = amoeba_choices.index(current_amoeba) if current_amoeba in amoeba_choices else 0
 
-            selected_approver = st.selectbox(
-                "Select approver",
-                all_user_emails,
-                index=approver_index,
-                key="approver_update"
-            )
-
-            selected_amoeba = st.selectbox(
-                "Select Amoeba / Department",
-                amoeba_choices,
-                index=amoeba_index,
-                key="amoeba_update"
-            )
+            selected_approver = st.selectbox("Select approver", all_user_emails, index=app_idx, key="app_upd")
+            selected_amoeba = st.selectbox("Select Amoeba / Department", amoeba_choices, index=am_idx, key="am_upd")
 
             col1, col2 = st.columns(2)
-
             with col1:
                 if st.button("Update User Profile"):
-                    exec_sql(
-                        "UPDATE users SET approver_email = ?, user_amoeba = ? WHERE email = ?",
-                        (selected_approver, selected_amoeba, selected_user_email)
-                    )
-                    st.success("User profile updated.")
-                    st.rerun()
-
+                    exec_sql("UPDATE users SET approver_email = ?, user_amoeba = ? WHERE email = ?", (selected_approver, selected_amoeba, selected_user_email))
+                    st.success("User profile updated."); st.rerun()
             with col2:
                 if st.button("Delete Selected User"):
                     exec_sql("DELETE FROM users WHERE email = ?", (selected_user_email,))
-                    st.success("User deleted.")
-                    st.rerun()
+                    st.success("User deleted."); st.rerun()
 
     elif menu == "Master Data" and st.session_state.user_role == "admin":
         st.subheader("Master Data Control Portal")
-
         tab1, tab2, tab3 = st.tabs(["Amoeba", "Expense Category", "Payment Method"])
 
         with tab1:
             amoeba_df = fetch_df("SELECT id, name FROM amoebas ORDER BY name")
             st.dataframe(amoeba_df, use_container_width=True)
-
             with st.form("add_amoeba_form"):
                 new_amoeba = st.text_input("New Amoeba / Department")
-                add_amoeba_btn = st.form_submit_button("Add Amoeba")
-
-                if add_amoeba_btn:
-                    if not new_amoeba.strip():
-                        st.error("Please enter a value.")
-                    else:
+                if st.form_submit_button("Add Amoeba"):
+                    if not new_amoeba.strip(): st.error("Please enter a value.")
+                    else: 
                         ok, msg = add_item("amoebas", new_amoeba.strip())
-                        if ok:
-                            st.success(msg)
-                            st.rerun()
-                        else:
-                            st.error(msg)
-
+                        st.success(msg) if ok else st.error(msg)
+                        if ok: st.rerun()
             if not amoeba_df.empty:
-                amoeba_map = {}
-                for _, row in amoeba_df.iterrows():
-                    amoeba_map[row["name"]] = row["id"]
-
-                selected_amoeba = st.selectbox("Select Amoeba to delete", list(amoeba_map.keys()))
+                amoeba_map = {r["name"]: r["id"] for _, r in amoeba_df.iterrows()}
+                sel_am = st.selectbox("Select Amoeba to delete", list(amoeba_map.keys()))
                 if st.button("Delete Amoeba"):
-                    exec_sql("DELETE FROM amoebas WHERE id = ?", (amoeba_map[selected_amoeba],))
-                    st.success("Amoeba deleted.")
-                    st.rerun()
+                    exec_sql("DELETE FROM amoebas WHERE id = ?", (amoeba_map[sel_am],))
+                    st.success("Amoeba deleted."); st.rerun()
 
         with tab2:
             category_df = fetch_df("SELECT id, name FROM categories ORDER BY name")
             st.dataframe(category_df, use_container_width=True)
-
             with st.form("add_category_form"):
                 new_category = st.text_input("New Expense Category")
-                add_category_btn = st.form_submit_button("Add Category")
-
-                if add_category_btn:
-                    if not new_category.strip():
-                        st.error("Please enter a value.")
+                if st.form_submit_button("Add Category"):
+                    if not new_category.strip(): st.error("Please enter a value.")
                     else:
                         ok, msg = add_item("categories", new_category.strip())
-                        if ok:
-                            st.success(msg)
-                            st.rerun()
-                        else:
-                            st.error(msg)
-
+                        st.success(msg) if ok else st.error(msg)
+                        if ok: st.rerun()
             if not category_df.empty:
-                category_map = {}
-                for _, row in category_df.iterrows():
-                    category_map[row["name"]] = row["id"]
-
-                selected_category = st.selectbox("Select Category to delete", list(category_map.keys()))
+                category_map = {r["name"]: r["id"] for _, r in category_df.iterrows()}
+                sel_cat = st.selectbox("Select Category to delete", list(category_map.keys()))
                 if st.button("Delete Category"):
-                    exec_sql("DELETE FROM categories WHERE id = ?", (category_map[selected_category],))
-                    st.success("Category deleted.")
-                    st.rerun()
+                    exec_sql("DELETE FROM categories WHERE id = ?", (category_map[sel_cat],))
+                    st.success("Category deleted."); st.rerun()
 
         with tab3:
             payment_df = fetch_df("SELECT id, name FROM payment_methods ORDER BY name")
             st.dataframe(payment_df, use_container_width=True)
-
             with st.form("add_payment_form"):
                 new_payment = st.text_input("New Payment Method")
-                add_payment_btn = st.form_submit_button("Add Payment Method")
-
-                if add_payment_btn:
-                    if not new_payment.strip():
-                        st.error("Please enter a value.")
+                if st.form_submit_button("Add Payment Method"):
+                    if not new_payment.strip(): st.error("Please enter a value.")
                     else:
                         ok, msg = add_item("payment_methods", new_payment.strip())
-                        if ok:
-                            st.success(msg)
-                            st.rerun()
-                        else:
-                            st.error(msg)
-
+                        st.success(msg) if ok else st.error(msg)
+                        if ok: st.rerun()
             if not payment_df.empty:
-                payment_map = {}
-                for _, row in payment_df.iterrows():
-                    payment_map[row["name"]] = row["id"]
-
-                selected_payment = st.selectbox("Select Payment Method to delete", list(payment_map.keys()))
+                payment_map = {r["name"]: r["id"] for _, r in payment_df.iterrows()}
+                sel_pay = st.selectbox("Select Payment Method to delete", list(payment_map.keys()))
                 if st.button("Delete Payment Method"):
-                    exec_sql("DELETE FROM payment_methods WHERE id = ?", (payment_map[selected_payment],))
-                    st.success("Payment method deleted.")
+                    exec_sql("DELETE FROM payment_methods WHERE id = ?", (payment_map[sel_pay],))
+                    st.success("Payment method deleted."); st.rerun()
                     st.rerun()
