@@ -67,10 +67,18 @@ def init_db():
     safe_add_column("expenses", "receipt_data BLOB")
     safe_add_column("expenses", "receipt_type TEXT")
 
-    exec_sql(
-        "INSERT OR IGNORE INTO users (email, name, password, role, approver_email, user_amoeba) VALUES (?, ?, ?, ?, ?, ?)",
-        ("radicafinace", "Radica Finance", hash_pw("radica!23"), "admin", "", "")
+        exec_sql(
+        "INSERT OR IGNORE INTO users (email, name, password, role) VALUES (?, ?, ?, ?)",
+        ("radicafinace", "Radica Finance", hash_pw("radica!23"), "admin")
     )
+
+    try:
+        exec_sql(
+            "UPDATE users SET approver_email = ?, user_amoeba = ? WHERE email = ?",
+            ("", "", "radicafinace")
+        )
+    except:
+        pass
 
     try:
         exec_sql(
