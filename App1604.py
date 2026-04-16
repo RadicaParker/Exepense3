@@ -67,7 +67,7 @@ def init_db():
     safe_add_column("expenses", "receipt_data BLOB")
     safe_add_column("expenses", "receipt_type TEXT")
 
-        exec_sql(
+    exec_sql(
         "INSERT OR IGNORE INTO users (email, name, password, role) VALUES (?, ?, ?, ?)",
         ("radicafinace", "Radica Finance", hash_pw("radica!23"), "admin")
     )
@@ -99,31 +99,6 @@ def init_db():
     if fetch_one("SELECT COUNT(*) FROM payment_methods")[0] == 0:
         for item in ["Corporate Card", "Cash", "Personal Card", "Bank Transfer"]:
             exec_sql("INSERT INTO payment_methods (name) VALUES (?)", (item,))
-    admin_count = fetch_one("SELECT COUNT(*) FROM users WHERE role = 'admin'")[0]
-
-    if admin_count == 0:
-        exec_sql(
-            "INSERT INTO users (email, name, password, role, approver_email, user_amoeba) VALUES (?, ?, ?, ?, ?, ?)",
-            ("radicafinace", "Radica Finance", hash_pw("radica!23"), "admin", "", "")
-        )
-
-    exec_sql(
-        "UPDATE users SET email = ?, name = ?, password = ? WHERE role = ?",
-        ("radicafinace", "Radica Finance", hash_pw("radica!23"), "admin")
-    )
-
-    if fetch_one("SELECT COUNT(*) FROM amoebas")[0] == 0:
-        for item in ["Marketing", "Sales", "Finance", "Operations", "Product"]:
-            exec_sql("INSERT INTO amoebas (name) VALUES (?)", (item,))
-
-    if fetch_one("SELECT COUNT(*) FROM categories")[0] == 0:
-        for item in ["Travel", "Meal", "Software", "Office Supplies", "Other"]:
-            exec_sql("INSERT INTO categories (name) VALUES (?)", (item,))
-
-    if fetch_one("SELECT COUNT(*) FROM payment_methods")[0] == 0:
-        for item in ["Corporate Card", "Cash", "Personal Card", "Bank Transfer"]:
-            exec_sql("INSERT INTO payment_methods (name) VALUES (?)", (item,))
-
 
 def create_user(email, name, password, role="user", approver_email="", user_amoeba=""):
     try:
