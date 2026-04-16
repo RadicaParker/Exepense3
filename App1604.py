@@ -12,14 +12,11 @@ st.set_page_config(
     layout="wide"
 )
 
-
 def get_conn():
     return sqlite3.connect(DB_FILE, check_same_thread=False)
 
-
 def hash_pw(password):
     return hashlib.sha256(password.encode()).hexdigest()
-
 
 def exec_sql(sql, params=()):
     conn = get_conn()
@@ -27,7 +24,6 @@ def exec_sql(sql, params=()):
     cur.execute(sql, params)
     conn.commit()
     conn.close()
-
 
 def fetch_one(sql, params=()):
     conn = get_conn()
@@ -37,20 +33,17 @@ def fetch_one(sql, params=()):
     conn.close()
     return row
 
-
 def fetch_df(sql, params=()):
     conn = get_conn()
     df = pd.read_sql_query(sql, conn, params=params)
     conn.close()
     return df
 
-
 def safe_add_column(table_name, column_def):
     try:
         exec_sql("ALTER TABLE " + table_name + " ADD COLUMN " + column_def)
     except:
         pass
-
 
 def init_db():
     exec_sql("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, name TEXT, password TEXT, role TEXT)")
@@ -110,13 +103,11 @@ def create_user(email, name, password, role="user", approver_email="", user_amoe
     except sqlite3.IntegrityError:
         return False, "This email is already registered."
 
-
 def login_user(email, password):
     return fetch_one(
         "SELECT email, name, role FROM users WHERE email = ? AND password = ?",
         (email, hash_pw(password))
     )
-
 
 def get_names(table_name):
     df = fetch_df("SELECT name FROM " + table_name + " ORDER BY name")
@@ -124,14 +115,12 @@ def get_names(table_name):
         return []
     return df["name"].tolist()
 
-
 def add_item(table_name, name):
     try:
         exec_sql("INSERT INTO " + table_name + " (name) VALUES (?)", (name,))
         return True, "Added successfully."
     except sqlite3.IntegrityError:
         return False, "This item already exists."
-
 
 def get_user_profile(user_email):
     row = fetch_one(
@@ -143,7 +132,6 @@ def get_user_profile(user_email):
         user_amoeba = row[1] if row[1] else ""
         return approver_email, user_amoeba
     return "", ""
-
 
 def show_receipt(receipt_name, receipt_data, receipt_type, key_name):
     if receipt_data is None:
@@ -161,13 +149,11 @@ def show_receipt(receipt_name, receipt_data, receipt_type, key_name):
         key=key_name
     )
 
-
 def logout():
     st.session_state.logged_in = False
     st.session_state.user_email = ""
     st.session_state.user_name = ""
     st.session_state.user_role = ""
-
 
 init_db()
 
@@ -485,13 +471,19 @@ else:
         st.markdown("### Update User Profile")
         non_admin_df = users_df[users_df["role"] != "admin"]
 
-        if not non_admin_df.empty:
+        if non_admin_df.empty:
+            st.info("No non-admin users found. Please add a user above to update their profile.")
+        else:
             user_options = {}
             for _, row in non_admin_df.iterrows():
                 label = str(row["name"]) + " (" + str(row["email"]) + ")"
                 user_options[label] = row["email"]
 
-            selected_user_label = st.selectbox("Select user", list(user_options.keys()))
+            selected_user_label = st.selectbox(
+                "Select user", 
+                list(user_options.keys()), 
+                key="selected_user_label"
+            )
             selected_user_email = user_options[selected_user_label]
 
             current_row = non_admin_df[non_admin_df["email"] == selected_user_email].iloc[0]
@@ -515,19 +507,22 @@ else:
                 key="amoeba_update"
             )
 
-            if st.button("Update User Profile"):
-                exec_sql(
-                    "UPDATE users SET approver_email = ?, user_amoeba = ? WHERE email = ?",
-                    (selected_approver, selected_amoeba, selected_user_email)
-                )
-                st.success("User profile updated.")
-                st.rerun()
+            col1, col2 = st.columns(2)
 
-            st.markdown("### Delete User")
-            if st.button("Delete Selected User"):
-                exec_sql("DELETE FROM users WHERE email = ?", (selected_user_email,))
-                st.success("User deleted.")
-                st.rerun()
+            with col1:
+                if st.button("Update User Profile"):
+                    exec_sql(
+                        "UPDATE users SET approver_email = ?, user_amoeba = ? WHERE email = ?",
+                        (selected_approver, selected_amoeba, selected_user_email)
+                    )
+                    st.success("User profile updated.")
+                    st.rerun()
+
+            with col2:
+                if st.button("Delete Selected User"):
+                    exec_sql("DELETE FROM users WHERE email = ?", (selected_user_email,))
+                    st.success("User deleted.")
+                    st.rerun()
 
     elif menu == "Master Data" and st.session_state.user_role == "admin":
         st.subheader("Master Data Control Portal")
