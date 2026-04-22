@@ -3,6 +3,9 @@ import sqlite3
 import hashlib
 import pandas as pd
 from datetime import date
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 DB_FILE = "expense_app.db"
 
@@ -159,6 +162,45 @@ def show_receipt(receipt_name, receipt_data, receipt_type, key_name):
         key=key_name
     )
 
+def send_approval_email(to_email, submitter_name, amount, currency, expense_type="Standard"):
+    """Sends an email notification to the approver."""
+    try:
+        # Check if secrets exist, if not gracefully skip sending email
+        if not hasattr(st, "secrets") or "SENDER_EMAIL" not in st.secrets:
+            return
+
+        smtp_server = st.secrets.get("SMTP_SERVER", "smtp.gmail.com")
+        smtp_port = st.secrets.get("SMTP_PORT", 587)
+        sender_email = st.secrets["SENDER_EMAIL"]
+        sender_password = st.secrets["SENDER_PASSWORD"]
+        app_url = st.secrets.get("APP_URL", "https://your-expense-app.streamlit.app")
+
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = to_email
+        msg['Subject'] = f"Action Required: New {expense_type} Expense from {submitter_name}"
+
+        body = f"""Hello,
+
+A new {expense_type} expense has been submitted by {submitter_name} and is waiting for your approval.
+
+Amount: {currency} {amount}
+
+Please log in to the Radica Amoeba Expense app to review and approve or reject this request:
+{app_url}
+
+Thank you!
+"""
+        msg.attach(MIMEText(body, 'plain'))
+
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.send_message(msg)
+        server.quit()
+    except Exception as e:
+        print(f"Email failed to send: {e}")
+
 def logout():
     st.session_state.logged_in = False
     st.session_state.user_email = ""
@@ -296,6 +338,10 @@ else:
                             "INSERT INTO expenses (expense_date, user_email, amoeba, category, description, amount, currency, payment_method, receipt_name, receipt_data, receipt_type, status, assigned_approver, approver_comment, approved_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             (str(expense_date), st.session_state.user_email, user_amoeba, category, description, amount, currency, payment_method, receipt_name, receipt_data, receipt_type, "Submitted", approver_email, "", "")
                         )
+                        
+                        # Call Email Function
+                        send_approval_email(approver_email, st.session_state.user_name, amount, currency, "Standard")
+                        
                         st.success("Expense submitted for approval.")
                         st.rerun()
 
@@ -367,6 +413,11 @@ else:
                             v3_name, v3_amount, v3_file.name, v3_file.getvalue(), v3_file.type,
                             selected_vendor, gp_pct, "Submitted", approver_email, "", ""
                         ))
+                        
+                        # Call Email Function (Passing selected vendor's amount for reference)
+                        display_amount = v1_amount if selected_vendor == "Vendor 1" else (v2_amount if selected_vendor == "Vendor 2" else v3_amount)
+                        send_approval_email(approver_email, st.session_state.user_name, display_amount, currency_v, "Vendor")
+                        
                         st.success("Vendor expense submitted for approval.")
                         st.rerun()
 
@@ -618,4 +669,3 @@ else:
                 if st.button("Delete Payment Method"):
                     exec_sql("DELETE FROM payment_methods WHERE id = ?", (payment_map[sel_pay],))
                     st.success("Payment method deleted."); st.rerun()
-                    st.rerun()
