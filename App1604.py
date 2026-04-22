@@ -21,12 +21,21 @@ def get_conn():
 def hash_pw(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
+def generate_approval_token(expense_id, expense_type, approver_email):
+    """Generates a secure hash so approval links cannot be forged."""
+    secret = st.secrets.get("APP_SECRET", "radica_super_secret_key_123")
+    raw_string = f"{expense_id}_{expense_type}_{approver_email}_{secret}"
+    return hashlib.sha256(raw_string.encode()).hexdigest()
+
 def exec_sql(sql, params=()):
+    """Executes SQL and returns the last inserted row ID (useful for new expenses)."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(sql, params)
     conn.commit()
+    last_id = cur.lastrowid
     conn.close()
+    return last_id
 
 def fetch_one(sql, params=()):
     conn = get_conn()
@@ -79,18 +88,8 @@ def init_db():
     )
 
     try:
-        exec_sql(
-            "UPDATE users SET approver_email = ?, user_amoeba = ? WHERE email = ?",
-            ("", "", "radicafinace")
-        )
-    except:
-        pass
-
-    try:
-        exec_sql(
-            "UPDATE users SET name = ?, password = ? WHERE email = ?",
-            ("Radica Finance", hash_pw("radica!23"), "radicafinace")
-        )
+        exec_sql("UPDATE users SET approver_email = ?, user_amoeba = ? WHERE email = ?", ("", "", "radicafinace"))
+        exec_sql("UPDATE users SET name = ?, password = ? WHERE email = ?", ("Radica Finance", hash_pw("radica!23"), "radicafinace"))
     except:
         pass
 
@@ -136,24 +135,17 @@ def add_item(table_name, name):
         return False, "This item already exists."
 
 def get_user_profile(user_email):
-    row = fetch_one(
-        "SELECT approver_email, user_amoeba FROM users WHERE email = ?",
-        (user_email,)
-    )
+    row = fetch_one("SELECT approver_email, user_amoeba FROM users WHERE email = ?", (user_email,))
     if row:
-        approver_email = row[0] if row[0] else ""
-        user_amoeba = row[1] if row[1] else ""
-        return approver_email, user_amoeba
+        return row[0] if row[0] else "", row[1] if row[1] else ""
     return "", ""
 
 def show_receipt(receipt_name, receipt_data, receipt_type, key_name):
     if receipt_data is None:
         st.info("No attachment available.")
         return
-
     if str(receipt_type).startswith("image/"):
         st.image(receipt_data, caption=receipt_name, use_container_width=True)
-
     st.download_button(
         "Download Document",
         data=receipt_data,
@@ -162,10 +154,9 @@ def show_receipt(receipt_name, receipt_data, receipt_type, key_name):
         key=key_name
     )
 
-def send_approval_email(to_email, submitter_name, amount, currency, expense_type="Standard"):
-    """Sends an email notification to the approver with clear error messages."""
+def send_approval_email(to_email, submitter_name, amount, currency, expense_type, expense_id):
+    """Sends an email notification to the approver with a 1-click approval link."""
     try:
-        # Check if secrets exist
         if not hasattr(st, "secrets") or "SENDER_EMAIL" not in st.secrets:
             st.warning("⚠️ Email skipped: 'SENDER_EMAIL' is missing from Streamlit secrets.")
             return
@@ -174,7 +165,12 @@ def send_approval_email(to_email, submitter_name, amount, currency, expense_type
         smtp_port = st.secrets.get("SMTP_PORT", 587)
         sender_email = st.secrets["SENDER_EMAIL"]
         sender_password = st.secrets["SENDER_PASSWORD"]
-        app_url = st.secrets.get("APP_URL", "https://your-expense-app.streamlit.app")
+        
+        app_url = st.secrets.get("APP_URL", "https://your-expense-app.streamlit.app").rstrip("/")
+        ex_type_code = "std" if expense_type == "Standard" else "ven"
+        token = generate_approval_token(expense_id, ex_type_code, to_email)
+        
+        approve_url = f"{app_url}/?action=approve&type={ex_type_code}&id={expense_id}&email={to_email}&token={token}"
 
         msg = MIMEMultipart()
         msg['From'] = sender_email
@@ -187,7 +183,13 @@ A new {expense_type} expense has been submitted by {submitter_name} and is waiti
 
 Amount: {currency} {amount}
 
-Please log in to the Radica Amoeba Expense app to review and approve or reject this request:
+-------------------------------------------------
+✅ ONE-CLICK APPROVE
+Click the link below to instantly approve this expense (no login required):
+{approve_url}
+-------------------------------------------------
+
+Or log in to the app to review attachments, vendor quotes, and details:
 {app_url}
 
 Thank you!
@@ -211,9 +213,53 @@ def logout():
     st.session_state.user_name = ""
     st.session_state.user_role = ""
 
-
+# ==========================================
+# Initialize DB
+# ==========================================
 init_db()
 
+# ==========================================
+# ONE-CLICK APPROVAL ROUTE CATCHER
+# ==========================================
+# If the URL contains ?action=approve, intercept it before rendering the app!
+if "action" in st.query_params and st.query_params["action"] == "approve":
+    ex_type = st.query_params.get("type", "")
+    ex_id = st.query_params.get("id", "")
+    appr_email = st.query_params.get("email", "")
+    token = st.query_params.get("token", "")
+    
+    st.title("💸 Radica Amoeba Expense - One-Click Approval")
+    
+    expected_token = generate_approval_token(ex_id, ex_type, appr_email)
+    
+    if token == expected_token:
+        table = "expenses" if ex_type == "std" else "vendor_expenses"
+        row = fetch_one(f"SELECT status, assigned_approver FROM {table} WHERE id = ?", (ex_id,))
+        
+        if row:
+            if row[0] == "Submitted" and row[1] == appr_email:
+                exec_sql(f"UPDATE {table} SET status = 'Approved', approver_comment = 'Approved via Email 1-Click', approved_by = ? WHERE id = ?", (appr_email, ex_id))
+                st.success(f"✅ Expense #{ex_id} has been successfully approved!")
+                st.balloons()
+            elif row[0] != "Submitted":
+                st.info(f"This expense has already been processed (Current status: {row[0]}).")
+            else:
+                st.error("You are not the assigned approver for this expense.")
+        else:
+            st.error("Expense record not found in the database.")
+    else:
+        st.error("❌ Invalid or expired approval link. Please log in to the app to approve manually.")
+        
+    st.write("---")
+    if st.button("Go to Login / Main App"):
+        st.query_params.clear()
+        st.rerun()
+        
+    st.stop() # Stops the rest of the script from loading so they don't see the login screen
+
+# ==========================================
+# MAIN APP RENDERING
+# ==========================================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "user_email" not in st.session_state:
@@ -278,15 +324,9 @@ else:
     st.sidebar.write("Role: " + st.session_state.user_role)
 
     if st.session_state.user_role == "admin":
-        menu = st.sidebar.radio(
-            "Navigation",
-            ["Expense Form", "My Expenses", "All Expenses", "Approval Queue", "User Management", "Master Data"]
-        )
+        menu = st.sidebar.radio("Navigation", ["Expense Form", "My Expenses", "All Expenses", "Approval Queue", "User Management", "Master Data"])
     else:
-        menu = st.sidebar.radio(
-            "Navigation",
-            ["Expense Form", "My Expenses", "Approval Queue"]
-        )
+        menu = st.sidebar.radio("Navigation", ["Expense Form", "My Expenses", "Approval Queue"])
 
     if st.sidebar.button("Logout"):
         logout()
@@ -300,9 +340,6 @@ else:
     if menu == "Expense Form":
         tab_reg, tab_ven = st.tabs(["Standard Expense", "Vendor Expense (3 Quotes)"])
 
-        # ========================================================
-        # STANDARD EXPENSE TAB
-        # ========================================================
         with tab_reg:
             st.subheader("Submit Standard Expense")
             with st.form("expense_form"):
@@ -329,30 +366,21 @@ else:
                     elif user_amoeba == "":
                         st.error("No Amoeba / Department is assigned to your account. Please contact admin.")
                     else:
-                        receipt_name = ""
-                        receipt_data = None
-                        receipt_type = ""
-
+                        receipt_name, receipt_data, receipt_type = "", None, ""
                         if receipt is not None:
                             receipt_name = receipt.name
                             receipt_data = receipt.getvalue()
                             receipt_type = receipt.type
 
-                        exec_sql(
+                        new_id = exec_sql(
                             "INSERT INTO expenses (expense_date, user_email, amoeba, category, description, amount, currency, payment_method, receipt_name, receipt_data, receipt_type, status, assigned_approver, approver_comment, approved_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             (str(expense_date), st.session_state.user_email, user_amoeba, category, description, amount, currency, payment_method, receipt_name, receipt_data, receipt_type, "Submitted", approver_email, "", "")
                         )
                         
-                        # Call Email Function
-                        send_approval_email(approver_email, st.session_state.user_name, amount, currency, "Standard")
-                        
+                        send_approval_email(approver_email, st.session_state.user_name, amount, currency, "Standard", new_id)
                         st.success("Expense submitted for approval.")
-                        # Rerun safely after email check
                         st.rerun()
 
-        # ========================================================
-        # VENDOR EXPENSE TAB
-        # ========================================================
         with tab_ven:
             st.subheader("Submit Vendor Expense")
             with st.form("vendor_expense_form"):
@@ -403,7 +431,7 @@ else:
                     elif not v1_file or not v2_file or not v3_file:
                         st.error("Please upload supporting quotations for all 3 vendors.")
                     else:
-                        exec_sql("""
+                        new_v_id = exec_sql("""
                             INSERT INTO vendor_expenses (
                                 expense_date, user_email, amoeba, category, description, currency, payment_method, 
                                 v1_name, v1_amount, v1_file_name, v1_file_data, v1_file_type,
@@ -419,9 +447,8 @@ else:
                             selected_vendor, gp_pct, "Submitted", approver_email, "", ""
                         ))
                         
-                        # Call Email Function (Passing selected vendor's amount for reference)
                         display_amount = v1_amount if selected_vendor == "Vendor 1" else (v2_amount if selected_vendor == "Vendor 2" else v3_amount)
-                        send_approval_email(approver_email, st.session_state.user_name, display_amount, currency_v, "Vendor")
+                        send_approval_email(approver_email, st.session_state.user_name, display_amount, currency_v, "Vendor", new_v_id)
                         
                         st.success("Vendor expense submitted for approval.")
                         st.rerun()
