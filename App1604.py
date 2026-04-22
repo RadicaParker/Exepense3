@@ -55,7 +55,7 @@ def init_db():
     exec_sql("CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)")
     exec_sql("CREATE TABLE IF NOT EXISTS payment_methods (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)")
     
-    # New table for Vendor Expenses (3 vendors comparison)
+    # Table for Vendor Expenses (3 vendors comparison)
     exec_sql("""CREATE TABLE IF NOT EXISTS vendor_expenses (
         id INTEGER PRIMARY KEY AUTOINCREMENT, expense_date TEXT, user_email TEXT, amoeba TEXT, 
         category TEXT, description TEXT, currency TEXT, payment_method TEXT, 
@@ -163,10 +163,11 @@ def show_receipt(receipt_name, receipt_data, receipt_type, key_name):
     )
 
 def send_approval_email(to_email, submitter_name, amount, currency, expense_type="Standard"):
-    """Sends an email notification to the approver."""
+    """Sends an email notification to the approver with clear error messages."""
     try:
-        # Check if secrets exist, if not gracefully skip sending email
+        # Check if secrets exist
         if not hasattr(st, "secrets") or "SENDER_EMAIL" not in st.secrets:
+            st.warning("⚠️ Email skipped: 'SENDER_EMAIL' is missing from Streamlit secrets.")
             return
 
         smtp_server = st.secrets.get("SMTP_SERVER", "smtp.gmail.com")
@@ -198,8 +199,11 @@ Thank you!
         server.login(sender_email, sender_password)
         server.send_message(msg)
         server.quit()
+        
+    except smtplib.SMTPAuthenticationError:
+        st.error("📧 Email failed: Authentication Error. Check your email and App Password in secrets.")
     except Exception as e:
-        print(f"Email failed to send: {e}")
+        st.error(f"📧 Email failed to send: {e}")
 
 def logout():
     st.session_state.logged_in = False
@@ -343,6 +347,7 @@ else:
                         send_approval_email(approver_email, st.session_state.user_name, amount, currency, "Standard")
                         
                         st.success("Expense submitted for approval.")
+                        # Rerun safely after email check
                         st.rerun()
 
         # ========================================================
